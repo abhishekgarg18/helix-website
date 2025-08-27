@@ -22,6 +22,22 @@ function createSelect(fd) {
   return select;
 }
 
+// derive branch, repo, and owner from the current hostname, e.g.
+// main--helix-website--owner.aem.page
+function getHelixLocationParts() {
+  try {
+    const { hostname } = window.location;
+    const parts = hostname.split('--');
+    const branch = parts[0] || 'main';
+    const repo = parts[1] || 'helix-website';
+    const ownerWithDomain = parts[2] || '';
+    const owner = ownerWithDomain.split('.')[0] || 'adobe';
+    return { branch, repo, owner };
+  } catch (e) {
+    return { branch: 'main', repo: 'helix-website', owner: 'adobe' };
+  }
+}
+
 function constructPayload(form) {
   const payload = {};
   [...form.elements].forEach((fe) => {
@@ -34,10 +50,118 @@ function constructPayload(form) {
   return payload;
 }
 
+function renderStatus(form, { ok, heading, details }) {
+  let status = form.querySelector('.form-status');
+  if (!status) {
+    status = document.createElement('div');
+    status.className = 'form-status';
+    form.append(status);
+  }
+  status.classList.toggle('success', !!ok);
+  status.classList.toggle('error', !ok);
+
+  const safeHeading = heading || (ok ? 'Success' : 'Failed');
+  let safeDetails = '';
+  if (details) {
+    if (typeof details === 'string') safeDetails = details;
+    else safeDetails = JSON.stringify(details, null, 2);
+  }
+  status.innerHTML = `
+    <strong>${safeHeading}</strong>
+    ${safeDetails ? `<pre>${safeDetails}</pre>` : ''}
+  `;
+}
+
+async function checkProcessStatus(processId) {
+  try {
+    const resp = await fetch('https://3531103-832brownpony-dev.adobeioruntime.net/api/v1/web/web-api/check-status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ processId }),
+    });
+    const text = await resp.text().catch(() => '');
+    let json;
+    try { json = JSON.parse(text); } catch (e) { json = null; }
+
+    const statusValue = json && (json.status || json.result || json.state);
+    const success = (typeof statusValue === 'string')
+      ? ['success', 'ok', 'completed', 'done'].includes(statusValue.toLowerCase())
+      : resp.ok;
+
+    return { ok: success, raw: text, json };
+  } catch (e) {
+    return { ok: false };
+  }
+}
+
+async function registerSite(payload) {
+  const email = payload.customerEmail || payload.customerEmailID || payload.email || '';
+  const siteName = payload.customerName || payload.siteName || '';
+  if (!email || !siteName) return { ok: false, status: 400, text: 'Missing email or siteName' };
+
+  const body = {
+    email,
+    recaptchaToken: 'RECAPTCHA_CLIENT_TOKEN',
+    recaptchaVersion: 'v2',
+    template: 'boilerplate-wknd',
+    siteName,
+  };
+
+  const resp = await fetch('https://3531103-832brownpony-dev.adobeioruntime.net/api/v1/web/web-api/registration', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const text = await resp.text().catch(() => '');
+  let json;
+  try { json = JSON.parse(text); } catch (e) { json = null; }
+  const processId = json && json.processId;
+
+  return { ok: resp.ok, status: resp.status, text, json, processId };
+}
+
 async function submitForm(form) {
   const payload = constructPayload(form);
   payload.timestamp = new Date().toJSON();
-  const resp = await fetch(`https://form.aem.page/main--helix-website--adobe${form.dataset.action}`, {
+
+  // Special action: create site on submit for UT/onboard form
+  if (form.dataset.action === '/forms/ut') {
+    try {
+      const reg = await registerSite(payload);
+      if (reg && reg.ok) {
+        renderStatus(form, {
+          ok: true,
+          heading: 'Registration submitted',
+          details: reg.json || reg.text,
+        });
+      } else {
+        renderStatus(form, {
+          ok: false,
+          heading: 'Registration failed',
+          details: reg && (reg.json || reg.text || `HTTP ${reg.status}`),
+        });
+      }
+
+      // Skip check-status for now
+      // if (reg && reg.processId) {
+      //   const status = await checkProcessStatus(reg.processId);
+      //   renderStatus(form, {
+      //     ok: status.ok,
+      //     heading: status.ok ? 'Success' : 'Failed',
+      //     details: status.json || status.raw,
+      //   });
+      // }
+    } catch (e) {
+      renderStatus(form, {
+        ok: false,
+        heading: 'Registration error',
+      });
+    }
+  }
+
+  const { branch, repo, owner } = getHelixLocationParts();
+  const resp = await fetch(`https://form.aem.page/${branch}--${repo}--${owner}${form.dataset.action}`, {
     method: 'POST',
     cache: 'no-cache',
     headers: {
@@ -59,10 +183,17 @@ function createButton(fd) {
       if (fd.Placeholder) form.dataset.action = fd.Placeholder;
       if (form.checkValidity()) {
         event.preventDefault();
+        button.disabled = true;
         button.setAttribute('disabled', '');
+        button.setAttribute('aria-disabled', 'true');
         await submitForm(form);
-        const redirectTo = fd.Extra;
-        window.location.href = redirectTo;
+        // For UT/onboard form, stay on page to show inline status; otherwise redirect
+        const shouldStay = form.dataset.action === '/forms/ut';
+        if (!shouldStay) {
+          const redirectTo = fd.Extra;
+          window.location.href = redirectTo;
+        }
+        // Do not re-enable button to avoid duplicate submissions
       }
     });
   }
@@ -131,14 +262,10 @@ function fill(form) {
   }
 }
 
-export async function createForm(formURL) {
-  const { pathname } = new URL(formURL);
-  const resp = await fetch(pathname);
-  const json = await resp.json();
+function buildFormFromJson(json, actionPath) {
   const form = document.createElement('form');
   const rules = [];
-  // eslint-disable-next-line prefer-destructuring
-  form.dataset.action = pathname.split('.json')[0];
+  form.dataset.action = actionPath || json.action || '/forms/inline';
   json.data.forEach((fd) => {
     fd.Type = fd.Type || 'text';
     const fieldWrapper = document.createElement('div');
@@ -187,13 +314,38 @@ export async function createForm(formURL) {
   form.addEventListener('change', () => applyRules(form, rules));
   applyRules(form, rules);
   fill(form);
-  return (form);
+  return form;
+}
+
+export async function createForm(formURLOrJson) {
+  if (typeof formURLOrJson === 'string') {
+    const { pathname } = new URL(formURLOrJson);
+    const resp = await fetch(pathname);
+    const json = await resp.json();
+    const actionPath = pathname.split('.json')[0];
+    return buildFormFromJson(json, actionPath);
+  }
+  if (typeof formURLOrJson === 'object' && formURLOrJson) {
+    return buildFormFromJson(formURLOrJson, formURLOrJson.action);
+  }
+  return document.createElement('div');
 }
 
 export default async function decorate(block) {
-  const form = block.querySelector('a[href$=".json"]');
+  const jsonLink = block.querySelector('a[href$=".json"]');
   addInViewAnimationToSingleElement(block, 'fade-up');
-  if (form) {
-    form.replaceWith(await createForm(form.href));
+  if (jsonLink) {
+    jsonLink.replaceWith(await createForm(jsonLink.href));
+    return;
+  }
+  const inlineScript = block.querySelector('script[type="application/json"]');
+  if (inlineScript) {
+    try {
+      const parsed = JSON.parse(inlineScript.textContent);
+      inlineScript.replaceWith(await createForm(parsed));
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn(`Invalid inline form JSON: ${e.message}`);
+    }
   }
 }

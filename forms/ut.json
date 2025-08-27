@@ -1,0 +1,9 @@
+{
+  "data": [
+    { "Type": "heading", "Label": "Support request" },
+    { "Type": "text", "Field": "submitter", "Label": "Submitter", "Placeholder": "Your name", "Mandatory": "x" },
+    { "Type": "email", "Field": "customerEmail", "Label": "Customer Email id", "Placeholder": "customer@example.com", "Mandatory": "x" },
+    { "Type": "text", "Field": "customerName", "Label": "Customer Name", "Placeholder": "Customer full name", "Mandatory": "x" },
+    { "Type": "submit", "Label": "Submit", "Placeholder": "/forms/ut", "Extra": "/" }
+  ]
+}

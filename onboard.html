@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta http-equiv="Content-Security-Policy" content="script-src 'nonce-aem' 'strict-dynamic'; base-uri 'self'; object-src 'none';" move-to-http-header="true">
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <script nonce="aem" src="/scripts/lib-franklin.js" type="module"></script>
+  <script nonce="aem" src="/scripts/scripts.js" type="module"></script>
+  <link rel="stylesheet" href="/styles/styles.css"/>
+  <title>ASO Sandbox Trial Request form</title>
+</head>
+<body>
+  <header></header>
+  <main>
+    <div class="section">
+      <div class="form">
+        <script type="application/json">
+        {
+          "action": "/forms/ut",
+          "data": [
+            { "Type": "heading", "Label": "ASO Sandbox Trial Request form" },
+            { "Type": "text", "Field": "submitter", "Label": "Submitter", "Placeholder": "Your name", "Mandatory": "x" },
+            { "Type": "email", "Field": "customerEmail", "Label": "Customer Email id", "Placeholder": "customer@example.com", "Mandatory": "x" },
+            { "Type": "text", "Field": "customerName", "Label": "Customer Name", "Placeholder": "Customer full name", "Mandatory": "x" },
+            { "Type": "submit", "Label": "Submit", "Placeholder": "/forms/ut", "Extra": "/" }
+          ]
+        }
+        </script>
+      </div>
+    </div>
+  </main>
+  <footer></footer>
+</body>
+</html>
