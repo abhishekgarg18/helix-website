@@ -72,6 +72,46 @@ function renderStatus(form, { ok, heading, details }) {
   `;
 }
 
+// Inline progress rendering (progress element + text)
+function renderProgress(form, { percent = 0, finished = false }) {
+  let wrap = form.querySelector('.form-progress');
+  if (!wrap) {
+    wrap = document.createElement('div');
+    wrap.className = 'form-progress';
+    const bar = document.createElement('progress');
+    bar.max = 100;
+    bar.value = 0;
+    bar.className = 'form-progress-bar';
+    const text = document.createElement('span');
+    text.className = 'form-progress-text';
+    wrap.append(bar, text);
+    form.append(wrap);
+  }
+  const bar = wrap.querySelector('progress');
+  const text = wrap.querySelector('.form-progress-text');
+  const clamped = Math.max(0, Math.min(100, Number.isFinite(percent) ? percent : 0));
+  bar.value = clamped;
+  text.textContent = finished ? 'Completed' : `${clamped}%`;
+  wrap.style.display = finished ? 'none' : '';
+}
+
+// Extract site path and asoSiteId from status JSON
+function getSiteInfoFromStatus(json) {
+  let sitePath = '';
+  try {
+    if (json && json.siteUrl) {
+      sitePath = new URL(json.siteUrl).pathname || '';
+    } else if (json && json.contentRoot && json.parentSuffix && json.siteName) {
+      const root = String(json.contentRoot).replace(/\/$/, '');
+      sitePath = `${root}/${json.parentSuffix}/${json.siteName}`;
+    }
+  } catch (e) {
+    sitePath = '';
+  }
+  const asoSiteId = json && (json.asoSiteId || json.asositeid || json.ASOSiteId);
+  return { sitePath, asoSiteId };
+}
+
 async function checkProcessStatus(processId) {
   try {
     const resp = await fetch('https://3531103-832brownpony-dev.adobeioruntime.net/api/v1/web/web-api/check-status', {
@@ -83,12 +123,15 @@ async function checkProcessStatus(processId) {
     let json;
     try { json = JSON.parse(text); } catch (e) { json = null; }
 
-    const statusValue = json && (json.status || json.result || json.state);
-    const success = (typeof statusValue === 'string')
-      ? ['success', 'ok', 'completed', 'done'].includes(statusValue.toLowerCase())
+    const statusValue = json && (json.status || json.result || json.state || json.completionStatus || '');
+    const finished = !!(json && json.finished === true);
+    const completionPercent = Number.isFinite(json && json.completionPercent) ? json.completionPercent : null;
+
+    const success = finished
+      ? ['success', 'ok', 'completed', 'done'].includes(String(statusValue).toLowerCase()) || resp.ok
       : resp.ok;
 
-    return { ok: success, raw: text, json };
+    return { ok: success, raw: text, json, finished, completionPercent };
   } catch (e) {
     return { ok: false };
   }
@@ -121,6 +164,41 @@ async function registerSite(payload) {
   return { ok: resp.ok, status: resp.status, text, json, processId };
 }
 
+// Poll until finished, updating progress UI
+async function pollProcessStatus(form, processId, { intervalMs = 2000, timeoutMs = 600000 } = {}) {
+  const start = Date.now();
+  renderProgress(form, { percent: 0, finished: false });
+  renderStatus(form, { ok: true, heading: 'Provisioning in progress…' });
+
+  while (Date.now() - start < timeoutMs) {
+    const status = await checkProcessStatus(processId);
+    if (status && status.json) {
+      const { completionPercent = 0, finished = false } = status;
+      renderProgress(form, { percent: completionPercent || 0, finished });
+      if (finished) {
+        const { sitePath, asoSiteId } = getSiteInfoFromStatus(status.json);
+        const lines = [];
+        if (sitePath) lines.push(`Site Path: ${sitePath}`);
+        if (asoSiteId) lines.push(`ASO Site ID: ${asoSiteId}`);
+        const details = lines.join('\n');
+        renderStatus(form, {
+          ok: status.ok,
+          heading: status.ok ? 'Provisioning complete' : 'Provisioning failed',
+          details,
+        });
+        return status;
+      }
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+
+  renderStatus(form, {
+    ok: false,
+    heading: 'Provisioning timed out',
+  });
+  return { ok: false };
+}
+
 async function submitForm(form) {
   const payload = constructPayload(form);
   payload.timestamp = new Date().toJSON();
@@ -135,6 +213,9 @@ async function submitForm(form) {
           heading: 'Registration submitted',
           details: reg.json || reg.text,
         });
+        if (reg && reg.processId) {
+          await pollProcessStatus(form, reg.processId);
+        }
       } else {
         renderStatus(form, {
           ok: false,
@@ -142,16 +223,6 @@ async function submitForm(form) {
           details: reg && (reg.json || reg.text || `HTTP ${reg.status}`),
         });
       }
-
-      // Skip check-status for now
-      // if (reg && reg.processId) {
-      //   const status = await checkProcessStatus(reg.processId);
-      //   renderStatus(form, {
-      //     ok: status.ok,
-      //     heading: status.ok ? 'Success' : 'Failed',
-      //     details: status.json || status.raw,
-      //   });
-      // }
     } catch (e) {
       renderStatus(form, {
         ok: false,
