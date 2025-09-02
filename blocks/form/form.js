@@ -73,7 +73,7 @@ function renderStatus(form, { ok, heading, details }) {
 }
 
 // Inline progress rendering (progress element + text)
-function renderProgress(form, { percent = 0, finished = false }) {
+function renderProgress(form, { percent = 0, finished = false, processId = null }) {
   let wrap = form.querySelector('.form-progress');
   if (!wrap) {
     wrap = document.createElement('div');
@@ -91,8 +91,38 @@ function renderProgress(form, { percent = 0, finished = false }) {
   const text = wrap.querySelector('.form-progress-text');
   const clamped = Math.max(0, Math.min(100, Number.isFinite(percent) ? percent : 0));
   bar.value = clamped;
-  text.textContent = finished ? 'Completed' : `${clamped}%`;
+  const pidSuffix = processId ? ` | Process ID: ${processId}` : '';
+  text.textContent = finished ? `Completed${pidSuffix}` : `${clamped}%${pidSuffix}`;
   wrap.style.display = finished ? 'none' : '';
+}
+
+// Show current status/state (currentStep, completionStatus, stepLog)
+function renderStateDetails(form, state = {}) {
+  let panel = form.querySelector('.form-progress-details');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.className = 'form-progress-details';
+    panel.innerHTML = `
+      <div class="form-progress-meta">
+        <span class="label">Status:</span>
+        <span class="val" data-field="completionStatus">-</span>
+        <span class="label" style="margin-left:12px;">Current step:</span>
+        <span class="val" data-field="currentStep">-</span>
+      </div>
+      <ul class="form-step-log"></ul>
+    `;
+    form.append(panel);
+  }
+  const statusEl = panel.querySelector('[data-field="completionStatus"]');
+  const stepEl = panel.querySelector('[data-field="currentStep"]');
+  const logEl = panel.querySelector('.form-step-log');
+  if (statusEl && 'completionStatus' in state) statusEl.textContent = state.completionStatus || '';
+  if (stepEl && 'currentStep' in state) stepEl.textContent = state.currentStep || '';
+  if (logEl && Array.isArray(state.stepLog)) {
+    // show last 10 entries
+    const last = state.stepLog.slice(-10);
+    logEl.innerHTML = last.map((l) => `<li>${String(l)}</li>`).join('');
+  }
 }
 
 // Extract site path and asoSiteId from status JSON
@@ -167,19 +197,22 @@ async function registerSite(payload) {
 // Poll until finished, updating progress UI
 async function pollProcessStatus(form, processId, { intervalMs = 2000, timeoutMs = 600000 } = {}) {
   const start = Date.now();
-  renderProgress(form, { percent: 0, finished: false });
+  renderProgress(form, { percent: 0, finished: false, processId });
   renderStatus(form, { ok: true, heading: 'Provisioning in progress…' });
 
   while (Date.now() - start < timeoutMs) {
     const status = await checkProcessStatus(processId);
     if (status && status.json) {
       const { completionPercent = 0, finished = false } = status;
-      renderProgress(form, { percent: completionPercent || 0, finished });
+      renderProgress(form, { percent: completionPercent || 0, finished, processId });
+      // Update state details (current step, status and recent logs)
+      try { renderStateDetails(form, status.json); } catch (e) { /* no-op */ }
       if (finished) {
         const { sitePath, asoSiteId } = getSiteInfoFromStatus(status.json);
         const lines = [];
         if (sitePath) lines.push(`Site Path: ${sitePath}`);
         if (asoSiteId) lines.push(`ASO Site ID: ${asoSiteId}`);
+        if (processId) lines.push(`Process ID: ${processId}`);
         const details = lines.join('\n');
         renderStatus(form, {
           ok: status.ok,
